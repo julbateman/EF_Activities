@@ -167,11 +167,61 @@ cor(var.mat)    ## correlation matrix among model parameters
 ```
 
 ### Task 1
+
+#P.1
 * Evaluate the MCMC chain for convergence. Include relevant diagnostics and plots. Determine and remove burnin e.g. ```var.burn <- window(var.out,start=burnin)```
+```{r}
+##Decided by each plot above the data converged around 1000. 
+
+burnin = 1000                                 ## determine convergence
+var.burn <- window(var.out,start=burnin)  ## remove burn-in
+plot(var.burn)                             ## check diagnostics post burn-in
+```
+
+#P.2
 * Report parameter summary table and plot marginal distributions
+```{r}
+effectiveSize(var.burn)
+cumuplot(var.burn,probs=c(0.025,0.25,0.5,0.75,0.975))
+var.thin = window(var.burn,thin=10)
+plot(var.thin)
+
+summary(var.burn)
+```
+#P.3
 * Describe and explain the parameter covariances that you observe in the pairs plot and parameter correlation matrix.
+
+```{r}
+#The pairs plots and parameter covariance matrix below show the relationship between the slope (b0 aka beta[1]), and the intercept (b1 aka beta[2), and the standard deviation (prec). There is a clear negative linear relationship between the slope and intercept term. This is expected becuase as the slope term increases, the intercept must decrease to fit the data properly. 
+# convert to matrix
+var.mat      <- as.matrix(var.burn)
+
+#Pairwise scatter plots & correlation
+pairs(var.mat)	## pairs plot to evaluate parameter correlation
+cor(var.mat)    ## correlation matrix among model parameters
+```
+
+#P.4
 * Compare the summary statistics for the Bayesian regression model to those from the classical regression:  summary(lm( y ~ x1 )).  This should include a comparison of the means and uncertainties of **all 3 model parameters**
+
+```{r}
+#The summary statistics from the Bayesian regrssion model verses a classic linear regression model give very close (almost exact) results. The intercept value in the classic regression was 10.28, while the beta[1] value in the Bayes model was 10.311. Similarly, the slope coefficient value was 1.940, and the beta[2] from the Bayes model was 1.939. The SE value on the coefficient in the linear model was 0.067, which correlates directly with the prec value in the bayes model = 0.0669. The Bayes model shows more information about the SD and SE on these 3 parameters. 
+
+summary(lm(data$y~data$x)) #Bayes regression summary 
+
+summary(var.burn) #Classic linear regression summary
+
+```
+
+
+#P.5
 * Compare the fit parameters to the “true” parameters we used to generate the pseudo-data.  How well does the statistical analysis recover the true model?
+
+```{r}
+#The "true" parametes were beta[1]=10, beta[2]=2. After running these models, the statistical model recoved the true model very well. The values of beta[1] from the analysis = 10.31, while beta[2]=1.939. These are extremely close to the true values. 
+
+beta
+```
 
 # Regression Credible Intervals
 
@@ -194,7 +244,7 @@ You can see within the loop that we're plotting our process model – b0 + b1*x 
 ```{r}
 ## credible and prediction intervals
 nsamp <- 5000
-samp <- sample.int(nrow(var.mat),nsamp)
+samp <- sample.int(nrow(var.mat),nsamp, replace = T)
 xpred <- 0:20  					## sequence of x values we're going to
 npred <- length(xpred)				##      make predictions for
 ypred <- matrix(0.0,nrow=nsamp,ncol=npred)	## storage for predictive interval
@@ -251,9 +301,122 @@ Extend your univariate regression model to a multivariate regression.
 
 ###  Task 2
 
+```{r}
+data.multi <- list(x1 = x1, x2 = x2, x3 = x1*x2, y = y, n = n)
+```
+
+#P.1
 * Show the JAGS and R code used.
+```{r}
+multivariate_regression <- "
+model{
+
+  beta ~ dmnorm(b0,Vb)  	## multivariate Normal prior on vector of regression params
+  prec ~ dgamma(s1,s2)    ## prior precision
+
+  for(i in 1:n){
+	  mu[i] <- beta[1] + beta[2]*x1[i] + beta[3]*x2[i] + beta[4]*x3[i]   	## process model
+	  y[i]  ~ dnorm(mu[i],prec)		        ## data model
+  }
+}
+"
+```
+
+```{r}
+## specify priors
+data.multi$b0 <- as.vector(c(0,0,0,0))      ## regression beta means
+data.multi$Vb <- solve(diag(10000,4))   ## regression beta precisions
+data.multi$s1 <- 0.1                    ## error prior n/2
+data.multi$s2 <- 0.1                    ## error prior SS/2
+```
+
+```{r}
+## initial conditions
+nchain = 3
+inits <- list()
+for(i in 1:nchain){
+ inits[[i]] <- list(beta = rnorm(4,0,5), prec = runif(1,1/100,1/20))
+}
+```
+
+```{r}
+j.model   <- jags.model(file = textConnection(multivariate_regression),
+                             data = data.multi,
+                             inits = inits,
+                             n.chains = nchain)
+```
+
+
+```{r}
+#sample from posterior
+var.out   <- coda.samples (model = j.model,
+                            variable.names = c("beta","prec"),
+                                n.iter = 2000)
+```
+
+#P.2
 * Include relevant convergence diagnostics and plots. 
+```{r}
+par(mfrow=c(1,1))
+
+## assess convergence
+GBR <- gelman.plot(var.out)
+```
+
+```{r}
+##Decided by each plot above the data converged around 700. 
+
+burnin = 700                                 ## determine convergence
+var.burn <- window(var.out,start=burnin)  ## remove burn-in
+plot(var.burn)                             ## check diagnostics post burn-in
+```
+
+```{r}
+effectiveSize(var.burn)
+cumuplot(var.burn,probs=c(0.025,0.25,0.5,0.75,0.975))
+var.thin = window(var.burn,thin=10)
+```
+
+#P.3
 * Report parameter summary table. 
+```{r}
+summary(var.burn)
+```
+
+#P.4
 * Plot marginal and pairwise joint distributions. Indicate 'true' parameters on the plots
+```{r}
+#The pairs plots and parameter covariance matrix below show the relationship between the slope (b0 aka beta[1]), and the intercepts (b1 aka beta[2-4]), and the standard deviation (prec). There are clear linear relationships between the slope and intercept terms. This is expected becuase as the slope term increases, the intercept must decrease to fit the data properly. 
+
+# convert to matrix
+var.mat <- as.matrix(var.burn)
+
+#Pairwise scatter plots & correlation
+pairs(var.mat)	## pairs plot to evaluate parameter correlation
+
+```
+```{r}
+#the plots below show that the data distribution for each predicted beta is centered around the "true" beta values displayed as red horizontal lines. 
+
+plot(var.mat[,1], var.mat[,2], 
+     ylab = "b1", xlab = "b0")
+abline(h=b1, col = "red")
+
+plot(var.mat[,1], var.mat[,3], 
+     ylab = "b2", xlab = "b0")
+abline(h=b2, col = "red")
+
+plot(var.mat[,1], var.mat[,4], 
+     ylab = "b3", xlab = "b0")
+abline(h=b3, col = "red")
+```
+
+#P.5
 * Compare the fit parameters to the “true” parameters we used to generate the pseudo-data.  How well does the statistical analysis recover the true model?
+```{r}
+#below are the true parameters we used to generate the pseudo-data. Compared to the values in the summary table, this statistical anaysis recovers the true model almost perfectly. 
+beta
+summary(var.burn)
+```
+
 

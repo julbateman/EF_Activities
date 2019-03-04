@@ -271,7 +271,7 @@ model {
 The data for fiting this model are
 
 ```{r}
-data = list(
+data.tree = list(
   N = 297, 
   mu0=20, 
   T=0.01, 
@@ -288,6 +288,87 @@ Run the unknown mean/fixed variance model to estimate mean tree diameter. Includ
 * Plot of MCMC “history”
 * Length of your MCMC (i.e. the total number of “updates”), the number of chains, the burnin values you used, the effective sample size, and any graphs/statistics/rationale you used to justify those settings
 
+
+```{r}
+#intitial conditions: mu = 20 because that was the indicated value of mu0 from prior data provided. I chose to do 4 chains of 10,15,20,25 to incorporate that mu0 value and possible surrounding values. I chose to sample 4000 samples (iterations). 
+
+inits.tree <- list()
+inits.tree[[1]] <- list(mu = 10)
+inits.tree[[2]] <- list(mu = 15)
+inits.tree[[3]] <- list(mu = 20)
+inits.tree[[4]] <- list(mu = 25)
+
+
+j.model.tree   <- jags.model (file = textConnection(NormalMeanN),
+                             data = data.tree,
+                             inits = inits.tree,
+                             n.chains = 4)
+
+
+jags.out.tree   <- coda.samples (model = j.model.tree,
+                            variable.names = c("mu"),
+                                n.iter = 4000)
+```
+
+```{r}
+#trace plots and density plots of MCMC indicate that the data has converged. Since the trace plot has all 4 colors overlapping and looks like white noise, we know it has converged.
+
+plot(jags.out.tree)
+```
+```{r}
+#Values are below 1.01 and are identical, therefore we know the data has converged. 
+gelman.diag(jags.out.tree)
+```
+
+```{r}
+#the first plot shows the GBR statistic versus sample... this was used to determine which samples occured before convergence, and therefore need to be removed. After looking at this plot, I decided it was safe to say the data converged around 1000. Then, I used the burn in to remove all samples before 1000th iteration from my data. 
+
+GBR.tree <- gelman.plot(jags.out.tree)
+
+burnin.tree = 1000                                 ## determine convergence
+jags.burn.tree <- window(jags.out.tree,start=burnin.tree)  ## remove burn-in
+plot(jags.burn.tree)                             ## check diagnostics post burn-in
+```
+
+```{r}
+#This shows the samples after the removal of the "burn in", and it looks like all of the chains are moving together (data converged). 
+
+
+acfplot(jags.burn.tree)
+```
+
+```{r}
+#Effective sample size 
+
+effectiveSize(jags.burn.tree)
+```
+
+```{r}
+#These plots are just showing how mu stabilizes as a function of sample size.
+
+
+cumuplot(jags.out.tree,probs=c(0.025,0.25,0.5,0.75,0.975))
+```
+
+```{r}
+#thinned version still shows the "white noise" look, indicating that the samples are moving together. 
+
+jags.thin.tree = window(jags.burn.tree,thin=10)
+plot(jags.thin.tree)
+```
+
+
+```{r}
+#The summary table below shows the stats for the final MCMC. It shows the mean value of 16.57, which is good since our mu0 was 20. These describe the posterior data. The extremely low standard deviation and SE values telle us that there is a low amount of uncertainty around our parameter (mu). Thats good news! 
+
+summary(jags.out.tree)
+```
+
+
+
+
+
+
 ### Activity Task 2
 Modify the model to account for the uncertainty in the variance. This only requires adding one line — a prior on S outside the loop.
 
@@ -300,5 +381,89 @@ Run the unknown mean/unknown variance model to simultaneously estimate both the 
 * Length of your MCMC (i.e. the total number of “updates”), the number of chains, burnin, effective sample size, and any graphs/statistics/rationale you used to justify those settings
 * Also describe any changes in the distribution of the mean (shape, location, tails) compared to Task 1.
   
+```{r}
+#I modified the data to make a S0 value that I took from the task 1 posterior. Using this data, I used that to make the prior for S. (I'm not sure if you're allowed to do that, but I figured I'd give it a try since it is a "past posterior".)
+
+NormalMeanN.new <- "
+model {
+  mu ~ dnorm(mu0,T) # prior on the mean 
+  S ~ dnorm(S0,T)  # prior on S
+  for(i in 1:N){
+    X[i] ~ dnorm(mu,S) # data model
+  }
+}
+"
+```
+
+```{r}
+data.tree.new = list(
+  N = 297, 
+  mu0 = 20, 
+  T = 0.01, 
+  S0 = 0.303162, 
+  X = c(20.9, 13.6, 15.7, 6.3, 2.7, 25.6, 4, 20.9, 7.8, 27.1, 25.2, 19, 17.8, 22.8, 12.5, 21.1, 22, 22.4, 5.1, 16, 20.7, 15.7, 5.5, 18.9, 22.9, 15.5, 18.6, 19.3, 14.2, 12.3, 11.8, 26.8, 17, 5.7, 12, 19.8, 19, 23.6, 19.9, 8.4, 22, 18.1, 21.6, 17, 12.4, 2.9, 22.6, 20.8, 18.2, 14.2, 17.3, 14.5, 8.6, 9.1, 2.6, 19.8, 20, 22.2, 10.2, 12.9, 20.9, 21.1, 7.3, 5.8, 23.1, 17, 21.5, 10.1, 18.4, 22.6, 21.2, 21.5, 22.4, 17.3, 16, 25, 22.4, 23.9, 23, 21.9, 19, 28.6, 16, 22.5, 23.2, 8.7, 23.4, 15.3, 25.6, 19.2, 17.4, 23.8, 20.4, 19, 3.6, 23.4, 19.6, 17.5, 16.5, 22, 19.7, 7.35, 18, 17.8, 9.6, 15, 12, 17.7, 21.4, 17, 22.1, 18.9, 15.05, 12.9, 19.3, 15.3, 13.6, 15.4, 10.6, 11.3, 11.8, 22.2, 22.2, 13.1, 7.4, 4.5, 11.7, 19.5, 19.9, 11.6, 13.9, 15.5, 11, 18.6, 17.6, 12.7, 20.9, 18.8, 22.4, 21.2, 18.2, 15.3, 13.6, 7.3, 17.4, 17.4, 10.5, 22.9, 23.2, 13.8, 14.8, 22.2, 20.9, 13, 18.9, 19, 15.2, 16.8, 18, 24.6, 15.4, 17.2, 23.2, 22.8, 25.5, 7.8, 6, 6.4, 19, 13.5, 23.7, 18, 22.2, 22.4, 9.3, 13.7, 18.9, 20.5, 23.3, 20.8, 18.4, 4.5, 12.2, 16.9, 13.5, 17.8, 16.9, 20.4, 19.5, 22.2, 24.5, 21.2, 16.5, 18, 16.4, 3.9, 17.9, 22, 12.9, 21, 18, 9.2, 15.9, 8.1, 8.3, 10.7, 12, 19.9, 13.6, 17.3, 11.5, 12.4, 15.1, 22, 19.3, 17.5, 14.5, 14.7, 17.5, 19.6, 12.9, 20.3, 17.9, 20.2, 18.3, 9.5, 19, 21, 13.1, 20.4, 16.3, 18.3, 11.8, 23.3, 15.2, 20, 17.9, 12, 19.6, 18.5, 16.2, 10.9, 17.8, 13.8, 10, 17.9, 15.6, 20.3, 14.9, 18.6, 12.5, 18.2, 16, 18.7, 18, 15.3, 19, 17.9, 15.8, 17.7, 14.4, 19.6, 18.3, 18.7, 17.8, 18, 10.1, 18.8, 16.4, 21.2, 16.6, 16.7, 17.8, 16.5, 19.3, 16.3, 14.2, 13, 9.4, 19.7, 13.4, 2.6, 17.6, 16.7, 17.6, 5.8, 17.6, 20.1, 18.2, 16.7, 14, 13.9, 5.1, 16.6, 3.9, 17.5, 18)
+  )
+```
+
+```{r}
+inits.tree.new <- list()
+inits.tree.new[[1]] <- list(mu = 10)
+inits.tree.new[[2]] <- list(mu = 15)
+inits.tree.new[[3]] <- list(mu = 20)
+inits.tree.new[[4]] <- list(mu = 25)
+```
+
+```{r}
+j.model.tree.new   <- jags.model (file = textConnection(NormalMeanN.new),
+                             data = data.tree.new,
+                             inits = inits.tree.new,
+                             n.chains = 4)
+```
+```{r}
+jags.out.tree.new   <- coda.samples (model = j.model.tree.new,
+                            variable.names = c("mu","S"),
+                                n.iter = 4000)
+```
+```{r}
+#These look good.... trace plots look like "white noise", implying convergence. The Density plot of S seems like it may have a longer tail on the right side coparede to mu. 
+
+plot(jags.out.tree.new)
+```
+```{r}
+#Looks good,.. both 1. 
+gelman.diag(jags.out.tree.new)
+```
+
+```{r}
+#These plots are showing that S converges much earlier than mu. Does this mean the new uncertainty in S is causing variations in mu? 
+
+GBR.tree.new <- gelman.plot(jags.out.tree.new)
+```
+```{r}
+burnin.tree.new = 2500                                 ## determine convergence
+jags.burn.tree.new <- window(jags.out.tree.new,start=burnin.tree.new)  ## remove burn-in
+plot(jags.burn.tree.new)                             ## check diagnostics post burn-in
+```
+```{r}
+
+acfplot(jags.burn.tree.new)
+```
+```{r}
+effectiveSize(jags.burn.tree.new)
+```
+```{r}
+cumuplot(jags.out.tree.new,probs=c(0.025,0.25,0.5,0.75,0.975))
+```
+
+```{r}
+jags.thin.tree.new = window(jags.burn.tree.new,thin=10)
+plot(jags.thin.tree.new)
+```
 
 
+```{r}
+summary(jags.out.tree.new)
+
+# I'm not sure if my understanding of this just isnt great or if I did it wrong... but by these results I can see that the model did not predict the value of S that well with the prior that was given. It was very difficult to figure out what value to give the prior, and what distribution would be an appropiate fit for it. Maybe once we cover more about Bayes and priors in class it will click better with me. I would love to figure out where I went wrong here/what I'm misunderstnading. 
+
+```

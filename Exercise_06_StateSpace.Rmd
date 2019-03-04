@@ -6,6 +6,7 @@ This activity will explore the state-space framework for modeling time-series an
 For this activity we will write all the code, process all the data, and visualize all the outputs in R, but the core of the Bayesian computation will be handled by JAGS (Just Another Gibbs Sampler, http://mcmc-jags.sourceforge.net). Therefore, before we get started you will want to download both the JAGS software and the rjags library, which allows R to call JAGS. We're also going to install our `ecoforecastR` package, which has some helper functions we will use.
 
 ```{r}
+#install.packages("rnoaa")
 library(rjags)
 library(rnoaa)
 devtools::install_github("EcoForecast/ecoforecastR")
