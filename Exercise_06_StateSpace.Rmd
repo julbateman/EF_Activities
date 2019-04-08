@@ -6,9 +6,9 @@ This activity will explore the state-space framework for modeling time-series an
 For this activity we will write all the code, process all the data, and visualize all the outputs in R, but the core of the Bayesian computation will be handled by JAGS (Just Another Gibbs Sampler, http://mcmc-jags.sourceforge.net). Therefore, before we get started you will want to download both the JAGS software and the rjags library, which allows R to call JAGS. We're also going to install our `ecoforecastR` package, which has some helper functions we will use.
 
 ```{r}
-#install.packages("rnoaa")
+#install.packages("daymetr")
 library(rjags)
-#library(rnoaa)
+library(rnoaa)
 library(daymetr)
 devtools::install_github("EcoForecast/ecoforecastR")
 ```
@@ -124,19 +124,261 @@ Assignment:
 
 To look at how observation frequency affects data assimilation, convert 3 out of every 4 observations to NA (i.e. treat the data as approximately monthly) and refit the model. 
 
-* Generate a time-series plot for the CI of x that includes the observations (as above). Use a different color and symbol to differentiate observations that were included in the model versus those that were converted to NA's.
-* Compare the CI between the two runs.
-* Generate a predicted (median) vs observed plot for the data points that were removed
-* Comment on the accuracy and precision of the state estimates.
-* How does the reduction in data volume affect the parameter estimates (taus)
+###P.1. Reduce data, refit model. 
+```{r}
+#subset data so its monthly (1/4 of origional)
+y.monthly = rep(NA,620)
+for(i in 1:620) {
+ if (i %% 4 == 0)
+ {
+   y.monthly[i] = y[i]
+ }
+}
+```
+
+```{r}
+
+RandomWalk.monthly = "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y.monthly[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model
+  for(t in 2:n){
+    x[t]~dnorm(x[t-1],tau_add)
+  }
+  
+  #### Priors
+  x[1] ~ dnorm(x_ic,tau_ic)
+  tau_obs ~ dgamma(a_obs,r_obs)
+  tau_add ~ dgamma(a_add,r_add)
+}
+"
+```
+
+```{r}
+#define data and priors as a list
+data.monthly <- list(y.monthly=log(y.monthly),n=length(y.monthly),x_ic=log(1000),tau_ic=100,a_obs=1,r_obs=1,a_add=1,r_add=1)
+```
+
+```{r}
+#initialization of MCMC
+nchain = 3
+init.monthly <- list()
+for(i in 1:nchain){
+  y.samp.monthly = sample(y.monthly,length(y.monthly),replace=TRUE)
+  init.monthly[[i]] <- list(tau_add=1/var(diff(log(y.samp.monthly))),tau_obs=5/var(log(y.samp.monthly)))
+}
+```
+
+```{r}
+#JAGS model
+j.model.monthly   <- jags.model (file = textConnection(RandomWalk.monthly),
+                             data = data.monthly,
+                             inits = init.monthly,
+                             n.chains = 3)
+```
+
+```{r, fig.asp = 1.0}
+#look at model fit: these plots show that the model does converge, but it is not as tight as the weekly data model. 
+
+## burn-in
+jags.out.monthly   <- coda.samples (model = j.model.monthly,
+                            variable.names = c("tau_add","tau_obs"),
+                                n.iter = 1000)
+plot(jags.out.monthly)
+
+#now take more samples since we know the data converges
+jags.out.monthly   <- coda.samples (model = j.model.monthly,
+                            variable.names = c("x","tau_add","tau_obs"),
+                                n.iter = 10000)
+```
+
+
+
+###P.2. Generate a time-series plot for the CI of x that includes the observations (as above). Use a different color and symbol to differentiate observations that were included in the model versus those that were converted to NA's.
+```{r}
+#separate out the values from origional data that were replaced with NA in monthly simulation
+y.empty = rep(NA,620)
+y.na = y
+for(i in 1:620) {
+ if (i %% 4 == 0)
+ {
+   y.na[i] = y.empty[i]
+ }
+}
+```
+
+```{r}
+time.rng = c(1,length(time)) ## adjust to zoom in and out
+out.monthly <- as.matrix(jags.out.monthly)
+x.cols.monthly <- grep("^x",colnames(out.monthly)) ## grab all columns that start with the letter x
+ci.monthly <- apply(exp(out.monthly[,x.cols.monthly]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+plot(time,ci.monthly[2,],type='n',ylim=range(y.monthly,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci.monthly[1,],ci.monthly[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
+points(time,y.na, pch = 16,cex = 0.5, col = "red")
+points(time,y.monthly,pch="+",cex=1)
+legend("top", c("NA Values", "Monthly Values"), pch = c(16, 3), col = c("red", "black"), cex = 0.7, horiz = T, bty = "n")
+```
+
+
+
+
+###P.3. Compare the CI between the two runs.
+```{r}
+#comparing the confidence intervals for the weekly run vs monthly run shows how much tighter and percise the weekly model was compared to when we moved some data. Though they do follow the same path, there is a much wider confidence interval for the monthly model. 
+
+plot(time,ci.monthly[2,],type='n',ylim=range(y.monthly,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci.monthly[1,],ci.monthly[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("darkgreen",0.75))
+legend("top", bty = "n", c("Origional CI", "Monthly CI"), col = c("dark green", "light blue"), horiz = T, pch = 16)
+```
+
+
+###P.4. Generate a predicted (median) vs observed plot for the data points that were removed
+```{r}
+plot(ci.monthly[3,], y.na, pch = 21, bg = "light blue", col = "black", 
+     main = "Predicted vs Observed", ylab = "Observed Values", xlab = "Predicted Values (Median)")
+abline(0,1, lty = 3)
+```
+
+
+###P.5. Comment on the accuracy and precision of the state estimates.
+> By observing the CI comparisona and Predicted vs Observed plots, I can tell that these model estimates were accurate, but not very precise. The plot above shows that the prediced vs estimated values follow a 1:1 line generally, but they are not perfectly linear. The CI comparison supports this statement considering both intervals followed the same path (accuracy), but the monthly model had much wider intervals, indicating less precise estimates compared to the true values. 
+
+
+###P.6. How does the reduction in data volume affect the parameter estimates (taus)
+
+```{r}
+hist(1/sqrt(out.monthly[,1]),main=colnames(out.monthly)[1])
+hist(1/sqrt(out.monthly[,2]),main=colnames(out.monthly)[2])
+```
+
+```{r, fig.asp = 1.0}
+plot(out.monthly[,1],out.monthly[,2],pch=".",xlab=colnames(out.monthly)[1],ylab=colnames(out.monthly)[2])
+cor(out.monthly[,1:2])
+```
+> The reduction in data seems to make the tau values skew the the left a little bit. This was also observed in the Predicted vs Actual plot when the values were clustered towards the lower left corner of the plot. The tau values are also very different, in the origional full model they were positve (~0.07), but in the reduced model they are (~-0.05). 
+
 
 Extra Credit (Part 1):
 ----------------------
 
 Return to the original data and instead of removing 3/4 of the data remove the last 40 observations (convert to NA) and refit the model to make a forecast for this period
 
-* Generate a time-series plot for the CI of x that includes the observations (as above but zoom the plot on the last ~80 observations). Use a different color and symbol to differentiate observations that were included in the model versus those that were converted to NA's.
-* Comment on how well the random walk model performed (both accuracy and precision) and how it might be modified to improve both these criteria.
+###Refit model
+```{r}
+#subset data to remove last 40 obvservations, and then separate the values that were na to use later
+y.last40 <- as.matrix(y)
+y.last40na <- as.matrix(y)
+
+y.last40[c(580:620),] <- NA
+y.last40na[c(1:580),] <- NA
+
+y.last40 <- as.vector(y.last40)
+y.last40na <- as.vector(y.last40na)
+```
+
+```{r}
+
+RandomWalk.last40 = "
+model{
+  
+  #### Data Model
+  for(t in 1:n){
+    y.last40[t] ~ dnorm(x[t],tau_obs)
+  }
+  
+  #### Process Model
+  for(t in 2:n){
+    x[t]~dnorm(x[t-1],tau_add)
+  }
+  
+  #### Priors
+  x[1] ~ dnorm(x_ic,tau_ic)
+  tau_obs ~ dgamma(a_obs,r_obs)
+  tau_add ~ dgamma(a_add,r_add)
+}
+"
+```
+
+```{r}
+#define data and priors as a list
+data.last40 <- list(y.last40=log(y.last40),n=length(y.last40),x_ic=log(1000),tau_ic=100,a_obs=1,r_obs=1,a_add=1,r_add=1)
+```
+
+```{r}
+#initialization of MCMC
+nchain = 3
+init.last40 <- list()
+for(i in 1:nchain){
+  y.samp.last40 = sample(y.last40,length(y.last40),replace=TRUE)
+  init.last40[[i]] <- list(tau_add=1/var(diff(log(y.samp.last40))),tau_obs=5/var(log(y.samp.last40)))
+}
+```
+
+```{r}
+#JAGS model
+j.model.last40   <- jags.model (file = textConnection(RandomWalk.last40),
+                             data = data.last40,
+                             inits = init.last40,
+                             n.chains = 3)
+```
+
+```{r, fig.asp = 1.0}
+#look at model fit: these plots show that the model does converge, but it is not as tight as the weekly data model. 
+
+## burn-in
+jags.out.last40   <- coda.samples (model = j.model.last40,
+                            variable.names = c("tau_add","tau_obs"),
+                                n.iter = 1000)
+plot(jags.out.last40)
+
+#now take more samples since we know the data converges
+jags.out.last40   <- coda.samples (model = j.model.last40,
+                            variable.names = c("x","tau_add","tau_obs"),
+                                n.iter = 10000)
+```
+
+###Generate a time-series plot for the CI of x that includes the observations (as above but zoom the plot on the last ~80 observations). Use a different color and symbol to differentiate observations that were included in the model versus those that were converted to NA's.
+```{r}
+time.rng.last40 = c(540,length(time)) ## adjust to zoom in and out
+out.last40 <- as.matrix(jags.out.last40)
+x.cols.last40 <- grep("^x",colnames(out.last40)) ## grab all columns that start with the letter x
+ci.last40 <- apply(exp(out.last40[,x.cols.last40]),2,quantile,c(0.025,0.5,0.975)) ## model was fit on log scale
+
+plot(time,ci.last40[2,],type='n',ylim=range(y.last40,na.rm=TRUE), ylab="Flu Index",log='y',xlim=time[time.rng.last40])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng.last40) < 100){ 
+  axis.Date(1, at=seq(time[time.rng.last40[1]],time[time.rng.last40[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci.last40[1,],ci.last40[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
+points(time,y.last40na, pch = 16,cex = 0.5, col = "red")
+points(time,y.last40,pch="+",cex=1)
+legend("top", c("NA Values", "Origional Values"), pch = c(16, 3), col = c("red", "black"), cex = 0.7, horiz = T, bty = "n")
+```
+
+###Comment on how well the random walk model performed (both accuracy and precision) and how it might be modified to improve both these criteria.
+```{r}
+plot(ci.last40[3,], y.last40na, pch = 21, bg = "light blue", col = "black", 
+     main = "Predicted vs Observed", ylab = "Observed Values", xlab = "Predicted Values (Median)")
+abline(0,1, lty = 3)
+```
+
+> The random walk model did not preform very well at all. It was neither accurate nor precise, which is clear by looking at the predicted vs observed plot, as well as how the CI completely blows up when it reaches the last 40 values. It seems like the model doesnt even know how to predict these values. This could be improved by adding in more information for how the model runs, which may be more complex than a Random Walk model. It needs to be trained to predict forward, not just fill spaces in data. 
+
 
 # Dynamic Linear Models
 
@@ -173,14 +415,14 @@ cor(as.matrix(params))
 pairs(as.matrix(params))
 
 ## confidence interval
-out <- as.matrix(ef.out$predict)
-ci <- apply(exp(out),2,quantile,c(0.025,0.5,0.975))
-plot(time,ci[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+out.ef <- as.matrix(ef.out$predict)
+ci.ef <- apply(exp(out.ef),2,quantile,c(0.025,0.5,0.975))
+plot(time,ci.ef[2,],type='n',ylim=range(y,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
 ## adjust x-axis label to be monthly if zoomed
 if(diff(time.rng) < 100){ 
   axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
 }
-ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
+ecoforecastR::ciEnvelope(time,ci.ef[1,],ci.ef[3,],col=ecoforecastR::col.alpha("lightBlue",0.75))
 points(time,y,pch="+",cex=0.5)
 ```
 
@@ -201,14 +443,60 @@ Finally, the returned object also includes the `data` that was used to fit the m
 Assignment:
 -----------
 
-* Compare the process and observation error estimates and model CI between this fit and the original random walk model. How much has the residual variance been reduced by?
-* Because a state-space model returns X's that are close to the Y's, metrics such as R2 and RMSE aren't great metrics of model performance. Besides looking at the taus, how else could we judge which model is doing better (in a way that avoids/penalizes overfitting)?
-* Explain and discuss the parameter estimates (betas) from the linear model (what do they mean both biologically and in terms of the predictability of the system) and their correlations
+###Compare the process and observation error estimates and model CI between this fit and the original random walk model. How much has the residual variance been reduced by?
+```{r}
+plot(time,ci.monthly[2,],type='n',ylim=range(y.monthly,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng) < 100){ 
+  axis.Date(1, at=seq(time[time.rng[1]],time[time.rng[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci[1,],ci[3,],col=ecoforecastR::col.alpha("darkgreen",0.75))
+ecoforecastR::ciEnvelope(time,ci.ef[1,],ci.ef[3,],col=ecoforecastR::col.alpha("lightBlue",0.6))
+legend("top", bty = "n", c("RW CI", "EF CI"), col = c("dark green", "light blue"), horiz = T, pch = 16)
+
+
+```
+>The EF model clearly has much tighter CI then the RW (Random Walk) model, indicating that it predicted more accurate and precise values to the data. 
+
+###Because a state-space model returns X's that are close to the Y's, metrics such as R2 and RMSE aren't great metrics of model performance. Besides looking at the taus, how else could we judge which model is doing better (in a way that avoids/penalizes overfitting)?
+> A state-space model's performance can be evaluated further by removing some data points throughout time to see how the model predicts them.
+
+###Explain and discuss the parameter estimates (betas) from the linear model (what do they mean both biologically and in terms of the predictability of the system) and their correlations
+>The beta estimates from this linear model are related to the relationship between the covariate (min Temp) and effect on the depedent variable (flu). The betaTmin has a value of ~-0.002, which is implying that there is a negative relationship between the flu and minimum temperature. This is expected: as temperature decreases, flu increases. The beta intercept value of ~0.32 is simply telling us where flu is when temp =0. The beta coeff related to the initial conditions tells us about the relationship between the IC and the flu; basically, this beta coeff of 0.95 tells us there is positive correlation between the initial condition and the flu. I would say the betaTmin and betaIC are the most important coeficients here, especially biologically, because we know that there is some (but small) influence between low temperatures and the flu, and an even higher correlation between initial conditions of an ecosystem and rates of the flu in a region. 
 
 Extra Credit (Part 2):
 ----------------------
 
-Repeat the process of forecasting the last 40 observations (convert to NA), this time using the DLM with temperature as a covariate
+###Repeat the process of forecasting the last 40 observations (convert to NA), this time using the DLM with temperature as a covariate
+```{r}
+data.last40$Tmin = df$tmin..deg.c.[match(time,df$date)]
+## fit the model
+ef.out.last40 <- ecoforecastR::fit_dlm(model=list(obs="y.last40",fixed="~ Tmin"),data.last40)
+names(ef.out.last40)
+```
 
-* Generate a time-series plot for the CI that includes the observations and both the random walk and DLM models (Hint, think about the order you plot in so you can see both models, also consider including transpancy [alpha] in the CI color)
-* Comment on how well the DLM model performed (both accuracy and precision) relative to the random walk and the true observations. How could the model be further improved?
+
+###Generate a time-series plot for the CI that includes the observations and both the random walk and DLM models (Hint, think about the order you plot in so you can see both models, also consider including transpancy [alpha] in the CI color)
+```{r, fig.asp = 1.0}
+## parameter diagnostics
+params.last40 <- window(ef.out.last40$params,start=1000) ## remove burn-in
+
+## confidence interval
+out.ef.last40 <- as.matrix(ef.out.last40$predict)
+ci.ef.last40 <- apply(exp(out.ef.last40),2,quantile,c(0.025,0.5,0.975))
+
+
+plot(time, ci.ef.last40[2,],type='n',ylim=range(y.last40,na.rm=TRUE),ylab="Flu Index",log='y',xlim=time[time.rng.last40])
+## adjust x-axis label to be monthly if zoomed
+if(diff(time.rng.last40) < 100){ 
+  axis.Date(1, at=seq(time[time.rng.last40[1]],time[time.rng.last40[2]],by='month'), format = "%Y-%m")
+}
+ecoforecastR::ciEnvelope(time,ci.last40[1,],ci.last40[3,],col=ecoforecastR::col.alpha("darkgreen", 0.7))
+ecoforecastR::ciEnvelope(time,ci.ef.last40[1,],ci.ef.last40[3,],col=ecoforecastR::col.alpha("lightBlue", 0.6))
+
+points(time,y.last40na, pch = 16,cex = 0.5, col = "red")
+points(time,y.last40,pch="+",cex=0.5)
+legend("top", c("NA Values", "Origional Values", "RW CI", "EF CI"), pch = c(16, 3, 15,15), col = c("red", "black","dark green", "light blue"), horiz = T, bty = "n")
+```
+###Comment on how well the DLM model performed (both accuracy and precision) relative to the random walk and the true observations. How could the model be further improved?
+> The DLM model was more accurate than the RW model, but it wasnt very precise. The wide CI got significantly smaller around the data points, but its still not following the trend completely like it should be. One startling thing about the DLS model is that it did not capture that peak of data, but the RW model did (mostly). I'm not sure if it would be better to have a model with less variance that missed a few points, or a model with a very wide CI that caputured it all.  

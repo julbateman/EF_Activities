@@ -110,7 +110,7 @@ model{
 }
 ```
 
-This code would work perfectly if we only had only measured a single tree, but we measured a number of trees so next need to modify the code to work with tree-by-year matrices of DBH and growth.
+#This code would work perfectly if we only had only measured a single tree, but we measured a number of trees so next need to modify the code to work with tree-by-year matrices of DBH and growth.
 
 ```
 model{
@@ -365,16 +365,332 @@ Third, let's look at the random effects. It is easy enough to plot the year effe
 
 By default this code is set to run with a small number of years (15), and a much too low number of MCMC iterations (500), just so that the code with "knit" quickly initially. For your analyses you should obviously increase these -- I found that convergence was adequate with around 20,000 samples, though I probably would run 10x longer than that for a publishable analysis. However, such an analysis would take hours to run.
 
-Assignment:
+#Assignment:
 
-1. Run the model initially with random effects off
+##1. Run the model initially with random effects off
+```{r, fig.asp=0.8}
 
-2. Rerun the model with random effects on. Compare this to the previous run. What is the relative partitioning of uncertainties in the different versions of the model among observation error, process error, and the different random effects? What does the size of these effects suggest about the drivers of uncertainty in tree growth?
+n.iter = 20000                           ##increased to 2000 iterations
 
-3. Based on the diagnostics, propose an additional effect (fixed or random) to add to the model. Such an effect should plausibly chip away at a sizable fraction of the unexplained variability -- you wouldn't want to propose an effect that isn't associated with systematic variability. 
+## this code fuses forest inventory data with tree growth data (tree ring or dendrometer band)
+## for the same plots. Code is a rewrite of Clark et al 2007 Ecol Appl into JAGS
+TreeDataFusionMV = "
+model{
 
-4. Explain any additional exploratory analyses you would perform (e.g. plotting your proposed covariate against one of the random effects). 
+### Loop over all individuals
+for(i in 1:ni){
+  
+  #### Data Model: DBH
+  for(t in 1:nt){
+  z[i,t] ~ dnorm(x[i,t],tau_dbh)
+  }
+  
+  #### Data Model: growth
+  for(t in 2:nt){
+  inc[i,t] <- x[i,t]-x[i,t-1]
+  y[i,t] ~ dnorm(inc[i,t],tau_inc)
+  }
+  
+  #### Process Model
+  for(t in 2:nt){
+  Dnew[i,t] <- x[i,t-1] + mu
+  x[i,t]~dnorm(Dnew[i,t],tau_add)
+  }
+  
+  x[i,1] ~ dnorm(x_ic,tau_ic)
 
-5. Write the JAGS code that would fit the proposed model (note: you don't have to run this model, just propose the code)
+}  ## end loop over individuals
+  
+  #### Priors
+  tau_dbh ~ dgamma(a_dbh,r_dbh)
+  tau_inc ~ dgamma(a_inc,r_inc)
+  tau_add ~ dgamma(a_add,r_add)
+  mu ~ dnorm(0.5,0.5)
+}"
+
+  ## state variable initial condition (subtract observed diameter increments off from the observed diameter)
+  z0 = t(apply(data$y,1,function(y){-rev(cumsum(rev(y)))})) + data$z[,ncol(data$z)] 
+  
+  ## JAGS initial conditions
+  nchain = 3
+  init <- list()
+  for(i in 1:nchain){
+    y.samp = sample(data$y,length(data$y),replace=TRUE)
+    init[[i]] <- list(x = z0,tau_add=runif(1,1,5)/var(diff(y.samp),na.rm=TRUE),
+                      tau_dbh=1,tau_inc=500,tau_ind=50,tau_yr=100,ind=rep(0,data$ni),year=rep(0,data$nt))
+  }
+  
+  ## compile JAGS model
+  j.model   <- jags.model (file = textConnection(TreeDataFusionMV),
+                           data = data,
+                           inits = init,
+                           n.chains = 3)
+  ## burn-in
+  jags.out   <- coda.samples (model = j.model,
+                              variable.names = c("tau_add","tau_dbh","tau_inc","mu","tau_ind","tau_yr"),
+                              n.iter = min(n.iter,2000))
+  plot(jags.out)
+  
+  ## run MCMC
+  jags.out   <- coda.samples (model = j.model,
+                              variable.names = c("x","tau_add","tau_dbh","tau_inc","mu",
+                                                 "tau_ind","tau_yr","ind","year"),
+                              n.iter = n.iter)
+```
+```{r, fig.height=8}
+  #### Diagnostic plots
+  
+  ### DBH
+  layout(matrix(1:8,4,2))
+  out <- as.matrix(jags.out)
+  x.cols = which(substr(colnames(out),1,1)=="x")   ## which columns are the state variable, x
+  ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975))
+  ci.names = parse.MatrixNames(colnames(ci),numeric=TRUE)
+  
+  smp = c(sample.int(data$ni,3),49)  
+  for(i in smp){
+    sel = which(ci.names$row == i)
+    plot(data$time,ci[2,sel],type='n',ylim=range(ci[,sel],na.rm=TRUE),ylab="DBH (cm)",main=i)
+    ciEnvelope(data$time,ci[1,sel],ci[3,sel],col="lightBlue")
+    points(data$time,data$z[i,],pch="+",cex=1.5)
+  }
+  
+  ## growth
+  for(i in smp){
+    sel = which(ci.names$row == i)
+    inc.mcmc = apply(out[,x.cols[sel]],1,diff)
+    inc.ci = apply(inc.mcmc,1,quantile,c(0.025,0.5,0.975))*5
+    
+    plot(data$time[-1],inc.ci[2,],type='n',ylim=range(inc.ci,na.rm=TRUE),ylab="Ring Increment (mm)")
+    ciEnvelope(data$time[-1],inc.ci[1,],inc.ci[3,],col="lightBlue")
+    points(data$time,data$y[i,]*5,pch="+",cex=1.5,type='b',lty=2)
+  }
+```
+
+```{r}
+##Look at histogram of fixed effects, mu ,and precision
+  ## process model
+  vars = (1:ncol(out))[-c(which(substr(colnames(out),1,1)=="x"),grep("tau",colnames(out)),
+                          grep("year",colnames(out)),grep("ind",colnames(out)))]
+  par(mfrow=c(1,1))
+  for(i in vars){
+    hist(out[,i],main=colnames(out)[i])
+  }
+  if(length(vars)>1) pairs(out[,vars])
+
+  ## Standard Deviations
+  par(mfrow=c(2,3))
+  prec = out[,grep("tau",colnames(out))]
+  for(i in 1:ncol(prec)){
+    hist(1/sqrt(prec[,i]),main=colnames(prec)[i])
+  }
+  cor(prec)
+  pairs(prec)
+```
+
+##2. Rerun the model with random effects on. Compare this to the previous run. What is the relative partitioning of uncertainties in the different versions of the model among observation error, process error, and the different random effects? What does the size of these effects suggest about the drivers of uncertainty in tree growth?
+```{r, fig.asp=0.8}
+
+n.iter = 20000                           ##increased to 20,000 
+
+## this code fuses forest inventory data with tree growth data (tree ring or dendrometer band)
+## for the same plots. Code is a rewrite of Clark et al 2007 Ecol Appl into JAGS
+TreeDataFusionMV = "
+model{
+  
+### Loop over all individuals
+for(i in 1:ni){
+  
+  #### Data Model: DBH
+  for(t in 1:nt){
+    z[i,t] ~ dnorm(x[i,t],tau_dbh)
+  }
+  
+  #### Data Model: growth
+  for(t in 2:nt){
+    inc[i,t] <- x[i,t]-x[i,t-1]
+    y[i,t] ~ dnorm(inc[i,t],tau_inc)
+  }
+  
+  #### Process Model
+  for(t in 2:nt){
+    Dnew[i,t] <- x[i,t-1] + mu + ind[i] + year[t]
+    x[i,t]~dnorm(Dnew[i,t],tau_add)
+  }
+  
+  ## individual effects
+  ind[i] ~ dnorm(0,tau_ind)
+  
+  ## initial condition
+  x[i,1] ~ dnorm(x_ic,tau_ic)
+  
+}  ## end loop over individuals
+  
+  ## year effects
+  for(t in 1:nt){
+    year[t] ~ dnorm(0,tau_yr)
+  }
+  
+  
+  #### Priors
+  tau_dbh ~ dgamma(a_dbh,r_dbh)
+  tau_inc ~ dgamma(a_inc,r_inc)
+  tau_add ~ dgamma(a_add,r_add)
+  tau_ind ~ dgamma(1,0.1)
+  tau_yr  ~ dgamma(1,0.1)
+  mu ~ dnorm(0.5,0.5)
+  
+}"
+
+  ## state variable initial condition (subtract observed diameter increments off from the observed diameter)
+  z0 = t(apply(data$y,1,function(y){-rev(cumsum(rev(y)))})) + data$z[,ncol(data$z)] 
+  
+  ## JAGS initial conditions
+  nchain = 3
+  init <- list()
+  for(i in 1:nchain){
+    y.samp = sample(data$y,length(data$y),replace=TRUE)
+    init[[i]] <- list(x = z0,tau_add=runif(1,1,5)/var(diff(y.samp),na.rm=TRUE),
+                      tau_dbh=1,tau_inc=500,tau_ind=50,tau_yr=100,ind=rep(0,data$ni),year=rep(0,data$nt))
+  }
+  
+  ## compile JAGS model
+  j.model   <- jags.model (file = textConnection(TreeDataFusionMV),
+                           data = data,
+                           inits = init,
+                           n.chains = 3)
+  ## burn-in
+  jags.out   <- coda.samples (model = j.model,
+                              variable.names = c("tau_add","tau_dbh","tau_inc","mu","tau_ind","tau_yr"),
+                              n.iter = min(n.iter,2000))
+  plot(jags.out)
+  
+  ## run MCMC
+  jags.out   <- coda.samples (model = j.model,
+                              variable.names = c("x","tau_add","tau_dbh","tau_inc","mu",
+                                                 "tau_ind","tau_yr","ind","year"),
+                              n.iter = n.iter)
+```
+
+```{r, fig.height=8}
+  #### Diagnostic plots
+  
+  ### DBH
+  layout(matrix(1:8,4,2))
+  out <- as.matrix(jags.out)
+  x.cols = which(substr(colnames(out),1,1)=="x")   ## which columns are the state variable, x
+  ci <- apply(out[,x.cols],2,quantile,c(0.025,0.5,0.975))
+  ci.names = parse.MatrixNames(colnames(ci),numeric=TRUE)
+  
+  smp = c(sample.int(data$ni,3),49)  
+  for(i in smp){
+    sel = which(ci.names$row == i)
+    plot(data$time,ci[2,sel],type='n',ylim=range(ci[,sel],na.rm=TRUE),ylab="DBH (cm)",main=i)
+    ciEnvelope(data$time,ci[1,sel],ci[3,sel],col="lightBlue")
+    points(data$time,data$z[i,],pch="+",cex=1.5)
+  }
+  
+  ## growth
+  for(i in smp){
+    sel = which(ci.names$row == i)
+    inc.mcmc = apply(out[,x.cols[sel]],1,diff)
+    inc.ci = apply(inc.mcmc,1,quantile,c(0.025,0.5,0.975))*5
+    
+    plot(data$time[-1],inc.ci[2,],type='n',ylim=range(inc.ci,na.rm=TRUE),ylab="Ring Increment (mm)")
+    ciEnvelope(data$time[-1],inc.ci[1,],inc.ci[3,],col="lightBlue")
+    points(data$time,data$y[i,]*5,pch="+",cex=1.5,type='b',lty=2)
+  }
+```
+
+```{r}
+##Look at histogram of fixed effects, mu ,and precision
+  ## process model
+  vars = (1:ncol(out))[-c(which(substr(colnames(out),1,1)=="x"),grep("tau",colnames(out)),
+                          grep("year",colnames(out)),grep("ind",colnames(out)))]
+  par(mfrow=c(1,1))
+  for(i in vars){
+    hist(out[,i],main=colnames(out)[i])
+  }
+  if(length(vars)>1) pairs(out[,vars])
+
+  ## Standard Deviations
+  par(mfrow=c(2,3))
+  prec = out[,grep("tau",colnames(out))]
+  for(i in 1:ncol(prec)){
+    hist(1/sqrt(prec[,i]),main=colnames(prec)[i])
+  }
+  cor(prec)
+  pairs(prec)
+```
+> The model that incorporated the random effects had noticably better explanatory power. The diagnostic plots showed how the data fit much better within the CI intervals (these CI intervals were also tigher than the previous model). 
+
+##3. Based on the diagnostics, propose an additional effect (fixed or random) to add to the model. Such an effect should plausibly chip away at a sizable fraction of the unexplained variability -- you wouldn't want to propose an effect that isn't associated with systematic variability. 
+> An additional effect that could be incorporated into this model that could chip away at unexplained variability is the location of the forest (topographically) -- this could be indicative of the anount of sunlight recievced by the forest, as well as soil type in the region that could influence the amount of nutrients available to the trees. You could also look at temperature data that can be averaged out seasonally, so you could see if seasonal temperature flucuations throughout the year had any clear effect on tree growth. I think the best covariate to include would be forest density, which could represent the tree competition, which could influence growth rates. 
+
+##4. Explain any additional exploratory analyses you would perform (e.g. plotting your proposed covariate against one of the random effects). 
+> For additional analysis, you could plot the variables I mentioned above (sunlight, soil type/nutrients, seasonal temp) against the tree growth rate. You could also plot the year random effect against the forest density, to see if there is any relationship between the amount of trees/area and the error throughout the year within the forest.
+
+##5. Write the JAGS code that would fit the proposed model (note: you don't have to run this model, just propose the code) 
+>The code below is a proposed JAGS model incorporating forest density. 
+
+```
+##FIRST find forest density data (maybe tree/m^2 or a volumetic measurement of %solid tree/m^3... I'm not quite sure what the standard forest metric typically would be, but I'm assuming it would be the per area measurement)
+
+model{
+  
+### Loop over all individuals
+for(i in 1:ni){
+  
+  #### Data Model: DBH
+  for(t in 1:nt){
+    z[i,t] ~ dnorm(x[i,t],tau_dbh)
+  }
+  
+  #### Data Model: growth
+  for(t in 2:nt){
+    inc[i,t] <- x[i,t]-x[i,t-1]
+    y[i,t] ~ dnorm(inc[i,t],tau_inc)
+  }
+  
+##must add another data model for the forest density: lets call it FD
+  ### Data Model: FD
+  for(t in 2:nt){
+    FD[i,t] <- sum(x[i,t])/*forest area*
+    w[i,t] ~ dnorm(FD[i,t],tau_FD)
+  }
+  
+  #### Process Model-- add forest density into process model 
+  for(t in 2:nt){
+    Dnew[i,t] <- x[i,t-1] + mu + FD + ind[i] + year[t]
+    x[i,t]~dnorm(Dnew[i,t],tau_add)
+  }
+  
+  ## individual effects
+  ind[i] ~ dnorm(0,tau_ind)
+  
+  ## initial condition
+  x[i,1] ~ dnorm(x_ic,tau_ic)
+  
+}  ## end loop over individuals
+  
+  ## year effects
+  for(t in 1:nt){
+    year[t] ~ dnorm(0,tau_yr)
+  }
+  
+  
+  #### Priors-- add new prior for forest density 
+  tau_dbh ~ dgamma(a_dbh,r_dbh)
+  tau_inc ~ dgamma(a_inc,r_inc)
+  tau_FD ~ dgamma(a_FD, r_FD)
+  tau_add ~ dgamma(a_add,r_add)
+  tau_ind ~ dgamma(1,0.1)
+  tau_yr  ~ dgamma(1,0.1)
+  mu ~ dnorm(0.5,0.5)
+  
+  }
+```
+
+
 
 ** BECAUSE THE PRODUCTION VERSION OF THIS CODE TAKES A LONG TIME TO RUN, PLEASE SUBMIT THE KNIT HTML NOT THE Rmd **

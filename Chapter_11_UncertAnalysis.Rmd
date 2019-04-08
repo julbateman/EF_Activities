@@ -227,6 +227,7 @@ lines(time2,N.I.ci[2,],lwd=0.5)
 ```
 
 **Question 1:** Describe the pattern to the initial condition uncertainty and compare that to your expectations (e.g. Table 1).
+*The pattern of the initial condition uncertainty observed shows wider uncertainty in the beginning that quickly diminished to very, very low uncertainty. This is what is expected in terms of what table 1 says about endogenous predictions; considering the other variables or things that may affect the system are excluded, the model's CIs are very small.  
 
 ### Parameter uncertainty
 
@@ -254,7 +255,9 @@ lines(time2,N.I.ci[2,],lwd=0.5)
 
 **Question 2:** 
 A) Describe the pattern and relative magnitude of the parameter uncertainty and compare this to your expectations. 
+*The pattern of the model when parameter uncertainty is incorporated shows much more uncertainty than the previous forcast that only included initial conditions. The uncertainty seems to be stable throughout time as well, meaning the CI does not expand or decrease throughout time. This trend is expected; in Table 1. it states that it typically does not increase or decrease. 
 B) Using the existing model and Monte Carlo approach, describe how you might partition the contribution of each parameter (r, Kg, alpha, beta) to the forecast uncertainty.
+*To partition the contribution of each parameter, you could add them all in one at a time and see how the model respondes with each parameter, or less parameters. 
 
 ### Driver uncertainty
 
@@ -269,7 +272,7 @@ for(i in 1:NE){
 
 This example of having a smaller number of driver ensembles is not uncommon, and we can handle this easily by resampling _with replacement_ the ensemble members (again, represented as row numbers) the same number of times as our overall ensembles. Thus, while every run may have a unique initial condition and parameter combination, many runs share the same drivers.
 
-When driving ecological forecasts with other forecast outputs (weather, land use, economics, etc), it is important to remember that we can only resample **predictions** or we can sample ensemble members **within a projection**, but we CANNOT resample **across projections**. For example, if I have a given climate scenario (e.g. RCP4.5), I can resample over what different climate models predict, but I cannot resample across the different scenarios, because those scenarios themselved do not represent random draws from the distribution of possible futures.
+When driving ecological forecasts with other forecast outputs (weather, land use, economics, etc), it is important to remember that we can only resample **predictions** or we can sample ensemble members **within a projection**, but we CANNOT resample **across projections**. For example, if I have a given climate scenario (e.g. RCP4.5), I can resample over what different climate models predict, but I cannot resample across the different scenarios, because those scenarios themselves do not represent random draws from the distribution of possible futures.
 
 ```{r}
 ## sample driver rows
@@ -293,7 +296,8 @@ ecoforecastR::ciEnvelope(time2,N.I.ci[1,],N.I.ci[3,],col=col.alpha(N.cols[1],tra
 lines(time2,N.I.ci[2,],lwd=0.5)
 ```
 
-**Question 3:** As before, describe the pattern of how driver uncertainty contributes to the forecast and compare that to our first principles expectations.
+**Question 3:** As before, describe the pattern of how driver uncertainty contributes to the forecast and compare that to our first principles expectations. 
+* This model shows much higher uncertainty and heterogenity. As time moves on, the CI increases significantly and deviates from the other model predictions greatly. This driver uncertainty decreases the predictive power compared the other models, becuase after about 40 years the predictions contain a very wide range of possibilities (at time = 60, N = between 200-600). This makes sense considering it's predicting precipitation which is very variable. The CI for this predictionis expected to be different becuase it's capturing the range of prediction (that is often hard to predict times increases).
 
 ### Process uncertainty
 
@@ -323,6 +327,7 @@ lines(time2,N.I.ci[2,],lwd=0.5)
 ```
 
 **Question 4:** Why might the relative contribution of the process error decline with time? Does this match expectations?
+*The contribution of process error may decline with time becuase the model's abilities decline over time, and therefore the process error has less reliable predictions to work from. This matches expectations considering the CIs do encompass all posibilites from the other models.
 
 ### Random Effect uncertainty
 
@@ -388,6 +393,7 @@ legend("topleft",legend=c("Process","Driver","Parameter","InitCond"),col=rev(N.c
 
 
 **Question 5:**  Based on results, where would you focus your research efforts next if your aim was to improve out-of-sample predictions? What about in-sample predictions?
+* To improve out-of-sample predictions, I would focus on the random effects of the system that contribe to the variance by trying to really understand the similaries and differences between the known site and new site in order to see if there is a way to decline the amount of uncertainty coming from the fact that it's a new environment with similar features. As for in-sample predictions, I would focus on the driver error variance contribution becuase if the driver uncertainty decreased, so would the process error. 
 
 ## Next steps:
 
@@ -401,16 +407,405 @@ The ensemble approach is very similar to the Monte Carlo approach but replaces t
 * Compare the Gaussian approximation to the full Monte Carlo ensemble
 * Reduce the sample size, `Nmc`, by 10-50x and assess how the Gaussian approximation compares to the original and updated Monte Carlo estimates.
 
-**2) Analytical uncertainty propagation:**
-For even more computationally demanding problems, or problems where an analytical solution is desirable, it is also possibly to approximate the uncertainty propagation analytically:
 
-* As a first-order approximation, assume that the single deterministic model run approximates the mean. It is important to realize that this violates Jensen's Inequality (mean of the function does not equal the function of the mean) but improving this approximation requires solving for the second deriatives (book eqn 11.2)
-* Approximate the forecast variance through time by applying Eqn 2 above to the logistic growth model. This will require taking the partial derivatives of the model with respect to each of the terms in the equation
-    + state = Y = N
-    + drivers = X = precip
-    + parameters = $\theta$ = $[r, Kg, \beta]$
-    + random effects = $\alpha$
-* Next you need to analytically calculate the variance of the initial conditions, drivers, parameters, random effects, and process error = $Var[\epsilon]$ = Q
-* Finally, because the forecast variance has to be solved iteratively (same as the mean), you need to create an alternative version of the `forecastN` function that calculates both N and VarN for each time step
-* Partitioning variances just requires keep track of each of the terms ($derivative^2 Var$)
-* Once you get the basic version working, you'll want to improve the approximation by including the covariance terms among parameters (book eqn 11.5)
+
+
+
+
+
+* Forward Simulation: Gaussian 
+
+```{r, echo=FALSE}
+### settings
+s <- 6             ## Focal site for forward simulation
+Nmc <- 1000         ## same number of Monte Carlo draws
+ylim = c(100,700)  ## set Y range on plot
+N.cols <- c("black","red","green","blue","orange") ## set colors
+trans <- 0.8       ## set transparancy
+time = 1:(NT*2)    ## total time
+time1 = 1:NT       ## calibration period
+time2 = time1+NT   ## forecast period
+```
+
+*create a simple function to encapsulate making the plot, but change CI so its now calculating the mean and SDs
+
+
+```{r}
+##` @param IC    Initial Conditions
+##` @param r     Intrinsic growth rate
+##` @param Kg    Across-site ('global') mean carrying capacity
+##` @param alpha Site random effect
+##` @param beta  Slope of precipitation effect on K
+##` @param ppt   Precipitation forecast
+##` @param Q     Process error (default = 0 for deterministic runs)
+##` @param n     Size of Monte Carlo ensemble
+forecastN <- function(IC,r,Kg,alpha,beta,ppt,Q=0,n=Nmc){
+  N <- matrix(NA,n,NT)  ## storage
+  Nprev <- IC           ## initialize
+  for(t in 1:NT){
+    K = pmax(1,Kg + alpha + beta*log(ppt[,t]/800))  ## calculate carrying capacity
+    mu = log(pmax(1,Nprev + r*Nprev*(1-Nprev/K)))   ## calculate mean
+    N[,t] <- rlnorm(n,mu,Q)                         ## predict next step
+    Nprev <- N[,t]                                  ## update IC
+  }
+  return(N)
+}
+```
+
+*Monte Carlo Error Propagation: Gaussian edition
+
+*** Initial Condition uncertainty
+```{r}
+## sample parameter rows from previous analysis
+prow = sample.int(nrow(params),Nmc,replace=TRUE)
+
+N.I <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=param.mean["r_global"],
+                   Kg=param.mean["K_global"],
+                   alpha=param.mean["alpha_site[6]"],
+                   beta=param.mean["beta"],
+                   ppt=ppt.mean,
+                   Q=0,
+                   n=Nmc)
+
+## Plot run, but with new predictive intervals instead
+plot.run()
+mean.I = apply(N.I,2,mean)
+sd.I = apply(N.I,2,sd)
+ci.I.upper = (sd.I*1.96)+mean.I
+ci.I.lower = mean.I-(sd.I*1.96)
+N.I.ci.new = matrix(c(ci.I.lower,mean.I, ci.I.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+*** Parameter uncertainty
+
+
+```{r}
+N.IP <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=params[prow,"r_global"],  ## sample parameters
+                   Kg=params[prow,"K_global"],
+                   alpha=params[prow,"alpha_site[6]"],
+                   beta=params[prow,"beta"],
+                   ppt=ppt.mean,
+                   Q=0,
+                   n=Nmc)
+
+## Plot run
+plot.run()
+mean.IP = apply(N.IP,2,mean)
+sd.IP = apply(N.IP,2,sd)
+ci.IP.upper = (sd.IP*1.96)+mean.IP
+ci.IP.lower = mean.IP-(sd.IP*1.96)
+N.IP.ci.new = matrix(c(ci.IP.lower,mean.IP, ci.IP.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+
+ecoforecastR::ciEnvelope(time2,N.IP.ci.new[1,],N.IP.ci.new[3,],col=col.alpha(N.cols[2],trans))
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+
+*** Driver uncertainty
+
+
+```{r,echo=FALSE}
+plot(time2,ppt_ensemble[1,],type='n',ylim=range(ppt_ensemble),xlab="time",ylab="precipitation (mm)")
+for(i in 1:NE){
+  lines(time2,ppt_ensemble[i,],lwd=0.5,col="grey")
+}
+```
+
+```{r}
+## sample driver rows
+drow = sample.int(nrow(ppt_ensemble),Nmc,replace=TRUE)
+
+N.IPD <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=params[prow,"r_global"],  ## sample parameters
+                   Kg=params[prow,"K_global"],
+                   alpha=params[prow,"alpha_site[6]"],
+                   beta=params[prow,"beta"],
+                   ppt=ppt_ensemble[drow,],   ## Sample drivers
+                   Q=0,
+                   n=Nmc)
+
+## Plot run
+plot.run()
+mean.IPD = apply(N.IPD,2,mean)
+sd.IPD = apply(N.IPD,2,sd)
+ci.IPD.upper = (sd.IPD*1.96)+mean.IPD
+ci.IPD.lower = mean.IPD-(sd.IPD*1.96)
+N.IPD.ci.new = matrix(c(ci.IPD.lower,mean.IPD, ci.IPD.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+ecoforecastR::ciEnvelope(time2,N.IPD.ci.new[1,],N.IPD.ci.new[3,],col=col.alpha(N.cols[3],trans))
+ecoforecastR::ciEnvelope(time2,N.IP.ci.new[1,],N.IP.ci.new[3,],col=col.alpha(N.cols[2],trans))
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+*** Process uncertainty
+
+```{r}
+## process error samples
+Qmc <- 1/sqrt(params[prow,"Q"])  ## convert from precision to standard deviation
+
+N.IPDE <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=params[prow,"r_global"],  ## sample parameters
+                   Kg=params[prow,"K_global"],
+                   alpha=params[prow,"alpha_site[6]"],
+                   beta=params[prow,"beta"],
+                   ppt=ppt_ensemble[drow,],   ## Sample drivers
+                   Q=Qmc,
+                   n=Nmc)
+
+## Plot run
+plot.run()
+mean.IPDE = apply(N.IPDE,2,mean)
+sd.IPDE = apply(N.IPDE,2,sd)
+ci.IPDE.upper = (sd.IPDE*1.96)+mean.IPDE
+ci.IPDE.lower = mean.IPDE-(sd.IPDE*1.96)
+N.IPDE.ci.new = matrix(c(ci.IPDE.lower,mean.IPDE, ci.IPDE.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+ecoforecastR::ciEnvelope(time2,N.IPDE.ci.new[1,],N.IPDE.ci.new[3,],col=col.alpha(N.cols[4],trans))
+ecoforecastR::ciEnvelope(time2,N.IPD.ci.new[1,],N.IPD.ci.new[3,],col=col.alpha(N.cols[3],trans))
+ecoforecastR::ciEnvelope(time2,N.IP.ci.new[1,],N.IP.ci.new[3,],col=col.alpha(N.cols[2],trans))
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+
+*** Random Effect uncertainty
+
+```{r}
+## Random effect samples
+tau.mc <- 1/sqrt(params[prow,"tau_site"]) ## converst from precision to std deviation
+aNew.mc <- rnorm(Nmc,0,tau.mc)
+
+N.IPDEA <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=params[prow,"r_global"],  ## sample parameters
+                   Kg=params[prow,"K_global"],
+                   alpha=aNew.mc,              ## sample random effect
+                   beta=params[prow,"beta"],
+                   ppt=ppt_ensemble[drow,],   ## Sample drivers
+                   Q=Qmc,
+                   n=Nmc)
+
+## Plot run
+plot.run()
+mean.IPDEA = apply(N.IPDEA,2,mean)
+sd.IPDEA = apply(N.IPDEA,2,sd)
+ci.IPDEA.upper = (sd.IPDEA*1.96)+mean.IPDEA
+ci.IPDEA.lower = mean.IPDEA-(sd.IPDEA*1.96)
+N.IPDEA.ci.new = matrix(c(ci.IPDEA.lower,mean.IPDEA, ci.IPDEA.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+ecoforecastR::ciEnvelope(time2,N.IPDEA.ci.new[1,],N.IPDEA.ci.new[3,],col=col.alpha(N.cols[5],trans))
+ecoforecastR::ciEnvelope(time2,N.IPDE.ci.new[1,],N.IPDE.ci.new[3,],col=col.alpha(N.cols[4],trans))
+ecoforecastR::ciEnvelope(time2,N.IPD.ci.new[1,],N.IPD.ci.new[3,],col=col.alpha(N.cols[3],trans))
+ecoforecastR::ciEnvelope(time2,N.IP.ci.new[1,],N.IP.ci.new[3,],col=col.alpha(N.cols[2],trans))
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+
+
+##Repeat but with smaller Nmc 
+* Forward Simulation: Gaussian 
+
+```{r, echo=FALSE}
+### settings
+s <- 6             ## Focal site for forward simulation
+Nmc = 60       ## reduced number of Monte Carlo draws
+ylim = c(100,700)  ## set Y range on plot
+N.cols <- c("black","red","green","blue","orange") ## set colors
+trans <- 0.8       ## set transparancy
+time = 1:(NT*2)    ## total time
+time1 = 1:NT       ## calibration period
+time2 = time1+NT   ## forecast period
+```
+
+
+```{r}
+##` @param IC    Initial Conditions
+##` @param r     Intrinsic growth rate
+##` @param Kg    Across-site ('global') mean carrying capacity
+##` @param alpha Site random effect
+##` @param beta  Slope of precipitation effect on K
+##` @param ppt   Precipitation forecast
+##` @param Q     Process error (default = 0 for deterministic runs)
+##` @param n     Size of Monte Carlo ensemble
+forecastN <- function(IC,r,Kg,alpha,beta,ppt,Q=0,n=Nmc){
+  N <- matrix(NA,n,NT)  ## storage
+  Nprev <- IC           ## initialize
+  for(t in 1:NT){
+    K = pmax(1,Kg + alpha + beta*log(ppt[,t]/800))  ## calculate carrying capacity
+    mu = log(pmax(1,Nprev + r*Nprev*(1-Nprev/K)))   ## calculate mean
+    N[,t] <- rlnorm(n,mu,Q)                         ## predict next step
+    Nprev <- N[,t]                                  ## update IC
+  }
+  return(N)
+}
+```
+
+
+* Monte Carlo Error Propagation: Gaussian edition
+
+*** Initial Condition uncertainty
+```{r}
+## sample parameter rows from previous analysis
+prow = sample.int(nrow(params),Nmc,replace=TRUE)
+
+N.I <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=param.mean["r_global"],
+                   Kg=param.mean["K_global"],
+                   alpha=param.mean["alpha_site[6]"],
+                   beta=param.mean["beta"],
+                   ppt=ppt.mean,
+                   Q=0,
+                   n=Nmc)
+
+## Plot run, but with new predictive intervals instead
+plot.run()
+mean.I = apply(N.I,2,mean)
+sd.I = apply(N.I,2,sd)
+ci.I.upper = (sd.I*1.96)+mean.I
+ci.I.lower = mean.I-(sd.I*1.96)
+N.I.ci.new = matrix(c(ci.I.lower,mean.I, ci.I.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+*** Parameter uncertainty
+
+
+```{r}
+N.IP <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=params[prow,"r_global"],  ## sample parameters
+                   Kg=params[prow,"K_global"],
+                   alpha=params[prow,"alpha_site[6]"],
+                   beta=params[prow,"beta"],
+                   ppt=ppt.mean,
+                   Q=0,
+                   n=Nmc)
+
+## Plot run
+plot.run()
+mean.IP = apply(N.IP,2,mean)
+sd.IP = apply(N.IP,2,sd)
+ci.IP.upper = (sd.IP*1.96)+mean.IP
+ci.IP.lower = mean.IP-(sd.IP*1.96)
+N.IP.ci.new = matrix(c(ci.IP.lower,mean.IP, ci.IP.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+
+ecoforecastR::ciEnvelope(time2,N.IP.ci.new[1,],N.IP.ci.new[3,],col=col.alpha(N.cols[2],trans))
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+
+*** Driver uncertainty
+
+
+```{r,echo=FALSE}
+plot(time2,ppt_ensemble[1,],type='n',ylim=range(ppt_ensemble),xlab="time",ylab="precipitation (mm)")
+for(i in 1:NE){
+  lines(time2,ppt_ensemble[i,],lwd=0.5,col="grey")
+}
+```
+
+```{r}
+## sample driver rows
+drow = sample.int(nrow(ppt_ensemble),Nmc,replace=TRUE)
+
+N.IPD <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=params[prow,"r_global"],  ## sample parameters
+                   Kg=params[prow,"K_global"],
+                   alpha=params[prow,"alpha_site[6]"],
+                   beta=params[prow,"beta"],
+                   ppt=ppt_ensemble[drow,],   ## Sample drivers
+                   Q=0,
+                   n=Nmc)
+
+## Plot run
+plot.run()
+mean.IPD = apply(N.IPD,2,mean)
+sd.IPD = apply(N.IPD,2,sd)
+ci.IPD.upper = (sd.IPD*1.96)+mean.IPD
+ci.IPD.lower = mean.IPD-(sd.IPD*1.96)
+N.IPD.ci.new = matrix(c(ci.IPD.lower,mean.IPD, ci.IPD.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+ecoforecastR::ciEnvelope(time2,N.IPD.ci.new[1,],N.IPD.ci.new[3,],col=col.alpha(N.cols[3],trans))
+ecoforecastR::ciEnvelope(time2,N.IP.ci.new[1,],N.IP.ci.new[3,],col=col.alpha(N.cols[2],trans))
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+*** Process uncertainty
+
+```{r}
+## process error samples
+Qmc <- 1/sqrt(params[prow,"Q"])  ## convert from precision to standard deviation
+
+N.IPDE <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=params[prow,"r_global"],  ## sample parameters
+                   Kg=params[prow,"K_global"],
+                   alpha=params[prow,"alpha_site[6]"],
+                   beta=params[prow,"beta"],
+                   ppt=ppt_ensemble[drow,],   ## Sample drivers
+                   Q=Qmc,
+                   n=Nmc)
+
+## Plot run
+plot.run()
+mean.IPDE = apply(N.IPDE,2,mean)
+sd.IPDE = apply(N.IPDE,2,sd)
+ci.IPDE.upper = (sd.IPDE*1.96)+mean.IPDE
+ci.IPDE.lower = mean.IPDE-(sd.IPDE*1.96)
+N.IPDE.ci.new = matrix(c(ci.IPDE.lower,mean.IPDE, ci.IPDE.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+ecoforecastR::ciEnvelope(time2,N.IPDE.ci.new[1,],N.IPDE.ci.new[3,],col=col.alpha(N.cols[4],trans))
+ecoforecastR::ciEnvelope(time2,N.IPD.ci.new[1,],N.IPD.ci.new[3,],col=col.alpha(N.cols[3],trans))
+ecoforecastR::ciEnvelope(time2,N.IP.ci.new[1,],N.IP.ci.new[3,],col=col.alpha(N.cols[2],trans))
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+
+*** Random Effect uncertainty
+
+```{r}
+## Random effect samples
+tau.mc <- 1/sqrt(params[prow,"tau_site"]) ## converst from precision to std deviation
+aNew.mc <- rnorm(Nmc,0,tau.mc)
+
+N.IPDEA <- forecastN(IC=IC[prow,"N[6,30]"],  ## sample IC
+                   r=params[prow,"r_global"],  ## sample parameters
+                   Kg=params[prow,"K_global"],
+                   alpha=aNew.mc,              ## sample random effect
+                   beta=params[prow,"beta"],
+                   ppt=ppt_ensemble[drow,],   ## Sample drivers
+                   Q=Qmc,
+                   n=Nmc)
+
+## Plot run
+plot.run()
+mean.IPDEA = apply(N.IPDEA,2,mean)
+sd.IPDEA = apply(N.IPDEA,2,sd)
+ci.IPDEA.upper = (sd.IPDEA*1.96)+mean.IPDEA
+ci.IPDEA.lower = mean.IPDEA-(sd.IPDEA*1.96)
+N.IPDEA.ci.new = matrix(c(ci.IPDEA.lower,mean.IPDEA, ci.IPDEA.upper), nrow = 3, ncol = 30,byrow = TRUE)
+
+ecoforecastR::ciEnvelope(time2,N.IPDEA.ci.new[1,],N.IPDEA.ci.new[3,],col=col.alpha(N.cols[5],trans))
+ecoforecastR::ciEnvelope(time2,N.IPDE.ci.new[1,],N.IPDE.ci.new[3,],col=col.alpha(N.cols[4],trans))
+ecoforecastR::ciEnvelope(time2,N.IPD.ci.new[1,],N.IPD.ci.new[3,],col=col.alpha(N.cols[3],trans))
+ecoforecastR::ciEnvelope(time2,N.IP.ci.new[1,],N.IP.ci.new[3,],col=col.alpha(N.cols[2],trans))
+ecoforecastR::ciEnvelope(time2,N.I.ci.new[1,],N.I.ci.new[3,],col=col.alpha(N.cols[1],trans))
+lines(time2,N.I.ci.new[2,],lwd=0.5)
+```
+
+
+#Comparison of Models 
+* After transforming the Monte Carlo simulation into a Guassian ensemble, there is a very clear difference in the driver uncertainty. In the MCMC model the driver uncertainty is close on the upper quantile, but deviates significantly on the lower bound. When the guassian model was done with the calculated mean and SD confidence intervals, it made the driver uncertianty bounds more evenly distributed from the mean. This made the driver uncertainty fit into the process uncertainty bound, especially as time progresses. Overall, the guassian replication of this model still fits very well, if not better than the MCMC, especially when sampling in-sample. The random effects also shows a decrease in uncertainty, especially at the lower bound.
+*After the sample size was decreased from 1000 to 60, similar differences were observed. The driver uncertainty decreased and was much tighter to the overall trend in comparison to both of the previous models. The process uncertainty was wider than both of the previous models though, which could be a result of the decreased amount of samples from this system, and therefore less certainty when sampling from it. The random error on the reduced Gaussian model was much more confident on the upper bound than the full-sized gaussian, but still had much less uncertainty on the lower bound in comparison to the MCMC. For such a large reduction of samples, this reduced gaussian model doesnt seem to perform much worse then the gaussian model with 1000 samples, and may even be better than the MCMC model. 
